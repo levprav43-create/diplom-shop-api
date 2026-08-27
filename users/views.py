@@ -3,7 +3,6 @@ from django.conf import settings
 from django.contrib.auth import authenticate, get_user_model
 from django.contrib.auth.tokens import default_token_generator
 from django.core.exceptions import ValidationError
-from django.core.mail import send_mail
 from django.utils.encoding import force_bytes, force_str
 from django.utils.http import urlsafe_base64_decode, urlsafe_base64_encode
 from rest_framework import status
@@ -11,6 +10,8 @@ from rest_framework.authtoken.models import Token
 from rest_framework.permissions import AllowAny
 from rest_framework.response import Response
 from rest_framework.views import APIView
+
+from orders.tasks import send_email
 
 from .serializers import LoginSerializer, RegisterSerializer
 
@@ -26,19 +27,9 @@ class RegisterView(APIView):
         serializer = RegisterSerializer(data=request.data)
         serializer.is_valid(raise_exception=True)
         user = serializer.save()
-        # Сразу выдаём токен, чтобы клиент мог работать с API
         token = Token.objects.create(user=user)
-        # Письмо с подтверждением регистрации (критерий этапа 5 ТЗ)
-        self._send_welcome_email(user)
-        return Response(
-            {'id': user.id, 'email': user.email, 'token': token.key},
-            status=status.HTTP_201_CREATED,
-        )
-
-    @staticmethod
-    def _send_welcome_email(user) -> None:
-        """Отправляет письмо с подтверждением регистрации и логином."""
-        send_mail(
+        # Письмо через Celery (не блокирует ответ API)
+        send_email.delay(
             subject='Регистрация в сервисе заказов — успешно',
             message=(
                 f'Здравствуйте, {user.first_name}!\n\n'
@@ -46,9 +37,11 @@ class RegisterView(APIView):
                 f'Ваш логин (email): {user.email}\n\n'
                 f'Приятных покупок!'
             ),
-            from_email=settings.DEFAULT_FROM_EMAIL,
             recipient_list=[user.email],
-            fail_silently=True,
+        )
+        return Response(
+            {'id': user.id, 'email': user.email, 'token': token.key},
+            status=status.HTTP_201_CREATED,
         )
 
 
@@ -63,7 +56,6 @@ class LoginView(APIView):
         email = serializer.validated_data['email']
         password = serializer.validated_data['password']
 
-        # Ищем пользователя по email (работает и для админа, и для клиентов)
         candidate = User.objects.filter(email__iexact=email).first()
         user = None
         if candidate is not None:
@@ -81,12 +73,7 @@ class LoginView(APIView):
 
 
 class PasswordResetRequestView(APIView):
-    """
-    Восстановление пароля: высылает письмо с uid и token.
-
-    Безопасность: всегда возвращает 200 — не раскрываем,
-    зарегистрирован ли такой email в системе.
-    """
+    """Восстановление пароля: письмо с uid/token через Celery."""
 
     permission_classes = (AllowAny,)
 
@@ -97,7 +84,7 @@ class PasswordResetRequestView(APIView):
         if user is not None:
             uid = urlsafe_base64_encode(force_bytes(user.pk))
             token = default_token_generator.make_token(user)
-            send_mail(
+            send_email.delay(
                 subject='Восстановление пароля',
                 message=(
                     f'Здравствуйте, {user.first_name}!\n\n'
@@ -108,9 +95,7 @@ class PasswordResetRequestView(APIView):
                     f'token: {token}\n\n'
                     f'Если это были не вы — просто проигнорируйте письмо.'
                 ),
-                from_email=settings.DEFAULT_FROM_EMAIL,
                 recipient_list=[user.email],
-                fail_silently=True,
             )
 
         return Response(
@@ -128,7 +113,6 @@ class PasswordResetConfirmView(APIView):
         token = request.data.get('token')
         new_password = request.data.get('new_password') or ''
 
-        # Декодируем uid и находим пользователя
         try:
             pk = force_str(urlsafe_base64_decode(uid))
             user = User.objects.get(pk=pk)
@@ -138,7 +122,6 @@ class PasswordResetConfirmView(APIView):
                 status=status.HTTP_400_BAD_REQUEST,
             )
 
-        # Проверяем токен (одноразовый и привязан к текущему паролю)
         if not default_token_generator.check_token(user, token):
             return Response(
                 {'detail': 'Неверный или просроченный токен восстановления'},
@@ -153,6 +136,5 @@ class PasswordResetConfirmView(APIView):
 
         user.set_password(new_password)
         user.save()
-        # Аннулируем старые токены — пользователь войдёт заново (безопасность)
         Token.objects.filter(user=user).delete()
         return Response({'detail': 'Пароль изменён. Войдите с новым паролем.'})

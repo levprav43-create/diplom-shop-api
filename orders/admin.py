@@ -1,25 +1,22 @@
 """
 Расширенная админка заказов: массовые действия, фильтры,
-автоуведомления клиентов при смене статуса.
+автоуведомления клиентов через Celery.
 """
 from django.conf import settings
 from django.contrib import admin, messages
-from django.core.mail import send_mail
 from django.utils.html import format_html
+
+from orders.tasks import send_email
 
 from .models import Cart, CartItem, Contact, Order, OrderItem
 
 
 class CartItemInline(admin.TabularInline):
-    """Позиции корзины — прямо на странице корзины."""
-
     model = CartItem
     extra = 0
 
 
 class OrderItemInline(admin.TabularInline):
-    """Позиции заказа — прямо на странице заказа."""
-
     model = OrderItem
     extra = 0
 
@@ -41,8 +38,8 @@ class OrderAdmin(admin.ModelAdmin):
     """
     Расширенная админка заказов:
     - Массовые действия для смены статуса
-    - Автоуведомление клиента при смене статуса
-    - Фильтры, поиск, цветовая индикация статусов
+    - Автоуведомление клиента через Celery при смене статуса
+    - Фильтры, поиск, цветовая индикация
     """
 
     list_display = (
@@ -55,7 +52,6 @@ class OrderAdmin(admin.ModelAdmin):
     inlines = (OrderItemInline,)
     readonly_fields = ('number', 'created_at')
 
-    # Массовые действия для смены статуса
     actions = [
         'mark_as_processing',
         'mark_as_shipped',
@@ -64,7 +60,6 @@ class OrderAdmin(admin.ModelAdmin):
     ]
 
     def status_display(self, obj):
-        """Цветной статус в списке заказов (format_html — безопасно для Django 5)."""
         colors = {
             'new': '#0070f3',
             'processing': '#f5a623',
@@ -82,16 +77,11 @@ class OrderAdmin(admin.ModelAdmin):
     status_display.short_description = 'Статус'
 
     def contact_short(self, obj):
-        """Краткое представление контакта."""
         return f'{obj.contact.last_name} {obj.contact.first_name}, {obj.contact.city}'
 
     contact_short.short_description = 'Контакт'
 
     def save_model(self, request, obj, form, change):
-        """
-        При сохранении заказа проверяем, изменился ли статус.
-        Если да — отправляем уведомление клиенту.
-        """
         if change:
             old_status = Order.objects.get(pk=obj.pk).status
             super().save_model(request, obj, form, change)
@@ -99,15 +89,14 @@ class OrderAdmin(admin.ModelAdmin):
                 self._notify_status_change(order=obj, old_status=old_status)
                 messages.success(
                     request,
-                    f'Заказ №{obj.number}: статус изменён, клиент уведомлён.',
+                    f'Заказ №{obj.number}: статус изменён, клиент уведомлён (через Celery).',
                 )
         else:
             super().save_model(request, obj, form, change)
 
     def _notify_status_change(self, order, old_status):
-        """Отправляет email-уведомление клиенту об изменении статуса."""
         old_display = dict(Order.Status.choices)[old_status]
-        send_mail(
+        send_email.delay(
             subject=f'Статус заказа №{order.number} изменён',
             message=(
                 f'Здравствуйте, {order.user.first_name}!\n\n'
@@ -118,12 +107,8 @@ class OrderAdmin(admin.ModelAdmin):
                 f'Адрес доставки: {order.contact.full_address}\n\n'
                 f'Спасибо за покупку!'
             ),
-            from_email=settings.DEFAULT_FROM_EMAIL,
             recipient_list=[order.user.email],
-            fail_silently=True,
         )
-
-    # ==================== Массовые действия ====================
 
     @admin.action(description='Отметить выбранные заказы как "В обработке"')
     def mark_as_processing(self, request, queryset):
@@ -142,7 +127,6 @@ class OrderAdmin(admin.ModelAdmin):
         return self._bulk_update_status(request, queryset, Order.Status.CANCELLED)
 
     def _bulk_update_status(self, request, queryset, new_status):
-        """Массовая смена статуса с уведомлением клиентов."""
         updated_count = 0
         for order in queryset:
             old_status = order.status
@@ -155,12 +139,12 @@ class OrderAdmin(admin.ModelAdmin):
         if updated_count > 0:
             self.message_user(
                 request,
-                f'Обновлено заказов: {updated_count}. Клиенты уведомлены.',
+                f'Обновлено заказов: {updated_count}. Клиенты уведомлены (через Celery).',
                 messages.SUCCESS,
             )
         else:
             self.message_user(
                 request,
-                'Ни один заказ не обновлён (статус уже совпадает).',
+                'Ни один заказ не обновлён.',
                 messages.INFO,
             )

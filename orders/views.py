@@ -1,11 +1,15 @@
 """API-вьюхи приложения orders: корзина, контакты, заказы."""
 from django.conf import settings
-from django.core.mail import send_mail
+from django.contrib.auth.tokens import default_token_generator
 from django.db import transaction
+from django.utils.encoding import force_bytes
+from django.utils.http import urlsafe_base64_encode
 from rest_framework import status
 from rest_framework.permissions import IsAdminUser, IsAuthenticated
 from rest_framework.response import Response
 from rest_framework.views import APIView
+
+from orders.tasks import send_email
 
 from .models import Cart, CartItem, Contact, Order, OrderItem
 from .serializers import (
@@ -24,12 +28,7 @@ from .serializers import (
 
 
 class CartView(APIView):
-    """
-    Корзина текущего пользователя.
-
-    GET  — получить содержимое корзины.
-    POST — добавить товар (если уже есть — увеличить количество).
-    """
+    """Корзина текущего пользователя."""
 
     permission_classes = (IsAuthenticated,)
 
@@ -39,8 +38,7 @@ class CartView(APIView):
 
     def get(self, request):
         cart = self.get_cart(request.user)
-        serializer = CartSerializer(cart)
-        return Response(serializer.data)
+        return Response(CartSerializer(cart).data)
 
     def post(self, request):
         serializer = CartItemCreateSerializer(data=request.data)
@@ -65,12 +63,7 @@ class CartView(APIView):
 
 
 class CartItemView(APIView):
-    """
-    Конкретная позиция корзины.
-
-    PUT    — изменить количество.
-    DELETE — удалить позицию.
-    """
+    """Конкретная позиция корзины (PUT/DELETE)."""
 
     permission_classes = (IsAuthenticated,)
 
@@ -89,7 +82,6 @@ class CartItemView(APIView):
                 {'detail': 'Позиция не найдена'},
                 status=status.HTTP_404_NOT_FOUND,
             )
-
         serializer = CartItemUpdateSerializer(data=request.data)
         serializer.is_valid(raise_exception=True)
         item.quantity = serializer.validated_data['quantity']
@@ -111,19 +103,13 @@ class CartItemView(APIView):
 
 
 class ContactListCreateView(APIView):
-    """
-    Контакты (адреса доставки) текущего пользователя.
-
-    GET  — список контактов пользователя.
-    POST — создать новый контакт.
-    """
+    """Контакты (адреса доставки) текущего пользователя."""
 
     permission_classes = (IsAuthenticated,)
 
     def get(self, request):
         contacts = Contact.objects.filter(user=request.user)
-        serializer = ContactSerializer(contacts, many=True)
-        return Response(serializer.data)
+        return Response(ContactSerializer(contacts, many=True).data)
 
     def post(self, request):
         serializer = ContactSerializer(data=request.data)
@@ -133,11 +119,7 @@ class ContactListCreateView(APIView):
 
 
 class ContactDeleteView(APIView):
-    """
-    Удаление контакта (адреса доставки).
-
-    DELETE — удалить контакт, если он принадлежит пользователю.
-    """
+    """Удаление контакта (адреса доставки)."""
 
     permission_classes = (IsAuthenticated,)
 
@@ -159,13 +141,7 @@ class ContactDeleteView(APIView):
 class OrderConfirmView(APIView):
     """
     Подтверждение заказа (ключевой сценарий ТЗ).
-
-    Принимает basket_id + contact_id:
-    1. Создаёт заказ (Order) со снапшотом цен и названий товаров
-    2. Списывает товары со склада
-    3. Очищает корзину
-    4. Отправляет email-подтверждение клиенту
-    5. Отправляет накладную администратору (критерий ТЗ)
+    Письма клиенту и админу отправляются через Celery.
     """
 
     permission_classes = (IsAuthenticated,)
@@ -179,9 +155,7 @@ class OrderConfirmView(APIView):
         basket = serializer.validated_data['basket_obj']
         contact = serializer.validated_data['contact_obj']
 
-        # Всё в одной транзакции: если что-то пойдёт не так — откат
         with transaction.atomic():
-            # 1. Создаём заказ
             total = basket.total_amount
             order = Order.objects.create(
                 user=request.user,
@@ -189,7 +163,6 @@ class OrderConfirmView(APIView):
                 total_amount=total,
             )
 
-            # 2. Переносим позиции корзины в позиции заказа со снапшотом
             for cart_item in basket.items.select_related('product'):
                 OrderItem.objects.create(
                     order=order,
@@ -198,18 +171,14 @@ class OrderConfirmView(APIView):
                     price=cart_item.product.price,
                     quantity=cart_item.quantity,
                 )
-                # Списываем товар со склада поставщика
                 product = cart_item.product
                 product.quantity = max(0, product.quantity - cart_item.quantity)
                 product.save(update_fields=['quantity'])
 
-            # 3. Очищаем корзину
             basket.items.all().delete()
 
-        # 4. Отправляем email клиенту (пока в консоль, позже — Celery)
+        # Письма через Celery (не блокируют HTTP-ответ)
         self._send_confirmation_email(order)
-
-        # 5. Отправляем накладную администратору (критерий ТЗ)
         self._send_admin_invoice(order)
 
         return Response(
@@ -218,17 +187,18 @@ class OrderConfirmView(APIView):
         )
 
     @staticmethod
-    def _send_confirmation_email(order: Order) -> None:
-        """Отправляет письмо-подтверждение заказа клиенту."""
+    def _build_items_text(order) -> str:
         items_lines = []
         for item in order.items.all():
             items_lines.append(
-                f'  • {item.product_name} × {item.quantity} '
-                f'= {item.amount} руб.'
+                f'  • {item.product_name} × {item.quantity} = {item.amount} руб.'
             )
-        items_text = '\n'.join(items_lines) if items_lines else '(пусто)'
+        return '\n'.join(items_lines) if items_lines else '(пусто)'
 
-        send_mail(
+    @staticmethod
+    def _send_confirmation_email(order: Order) -> None:
+        items_text = OrderConfirmView._build_items_text(order)
+        send_email.delay(
             subject=f'Заказ №{order.number} подтверждён',
             message=(
                 f'Здравствуйте, {order.user.first_name}!\n\n'
@@ -238,14 +208,11 @@ class OrderConfirmView(APIView):
                 f'Состав заказа:\n{items_text}\n\n'
                 f'Спасибо за покупку!'
             ),
-            from_email=settings.DEFAULT_FROM_EMAIL,
             recipient_list=[order.contact.email],
-            fail_silently=True,
         )
 
     @staticmethod
     def _send_admin_invoice(order: Order) -> None:
-        """Отправляет накладную администратору (критерий ТЗ)."""
         items_lines = []
         for item in order.items.all():
             items_lines.append(
@@ -254,7 +221,7 @@ class OrderConfirmView(APIView):
             )
         items_text = '\n'.join(items_lines) if items_lines else '(пусто)'
 
-        send_mail(
+        send_email.delay(
             subject=f'Новый заказ №{order.number}',
             message=(
                 f'Поступил новый заказ!\n\n'
@@ -265,9 +232,7 @@ class OrderConfirmView(APIView):
                 f'Итого: {order.total_amount} руб.\n\n'
                 f'Состав заказа:\n{items_text}'
             ),
-            from_email=settings.DEFAULT_FROM_EMAIL,
             recipient_list=[settings.ADMIN_EMAIL],
-            fail_silently=True,
         )
 
 
@@ -278,8 +243,7 @@ class OrderListView(APIView):
 
     def get(self, request):
         orders = Order.objects.filter(user=request.user)
-        serializer = OrderListSerializer(orders, many=True)
-        return Response(serializer.data)
+        return Response(OrderListSerializer(orders, many=True).data)
 
 
 class OrderDetailView(APIView):
@@ -297,16 +261,11 @@ class OrderDetailView(APIView):
                 {'detail': 'Заказ не найден'},
                 status=status.HTTP_404_NOT_FOUND,
             )
-        serializer = OrderSerializer(order)
-        return Response(serializer.data)
+        return Response(OrderSerializer(order).data)
 
 
 class OrderStatusUpdateView(APIView):
-    """
-    Редактирование статуса заказа (доступно только администратору).
-
-    PATCH — изменить статус заказа (new, processing, shipped, completed, cancelled).
-    """
+    """Редактирование статуса заказа (только админ). Уведомление через Celery."""
 
     permission_classes = (IsAdminUser,)
 
@@ -322,15 +281,14 @@ class OrderStatusUpdateView(APIView):
         new_status = request.data.get('status')
         if new_status not in [choice[0] for choice in Order.Status.choices]:
             return Response(
-                {'detail': f'Недопустимый статус. Допустимые: {[c[0] for c in Order.Status.choices]}'},
+                {'detail': 'Недопустимый статус'},
                 status=status.HTTP_400_BAD_REQUEST,
             )
 
         order.status = new_status
         order.save(update_fields=['status'])
 
-        # Отправляем уведомление клиенту об изменении статуса
-        send_mail(
+        send_email.delay(
             subject=f'Статус заказа №{order.number} изменён',
             message=(
                 f'Здравствуйте, {order.user.first_name}!\n\n'
@@ -338,9 +296,7 @@ class OrderStatusUpdateView(APIView):
                 f'{order.get_status_display()}.\n\n'
                 f'Итого: {order.total_amount} руб.'
             ),
-            from_email=settings.DEFAULT_FROM_EMAIL,
             recipient_list=[order.user.email],
-            fail_silently=True,
         )
 
         return Response({'number': order.number, 'status': order.get_status_display()})

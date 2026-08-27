@@ -2,7 +2,7 @@
 import yaml
 from django.db.models import Q
 from rest_framework import status
-from rest_framework.parsers import FormParser, JSONParser, MultiPartParser
+from rest_framework.parsers import FormParser, MultiPartParser
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 from rest_framework.views import APIView
@@ -127,7 +127,9 @@ class PartnerUpdateView(APIView):
     POST /api/partner/update/
     Поле формы: file — YAML-файл.
 
-    Если у магазина ещё не был owner — назначается текущий пользователь.
+    Импорт выполняется синхронно, т.к. партнёру нужен немедленный ответ
+    со статистикой. Асинхронный вариант (Celery) доступен через кнопку
+    «Запустить импорт» в админке.
     """
 
     permission_classes = (IsAuthenticated,)
@@ -156,7 +158,6 @@ class PartnerUpdateView(APIView):
                 status=status.HTTP_400_BAD_REQUEST,
             )
 
-        # Если магазин существует и имеет другого владельца — 403
         existing = Shop.objects.filter(name=shop_name).first()
         if existing and existing.owner and existing.owner != request.user:
             return Response(
@@ -164,11 +165,9 @@ class PartnerUpdateView(APIView):
                 status=status.HTTP_403_FORBIDDEN,
             )
 
-        # Импортируем через общий модуль (DRY)
         result = import_shop_data(data)
         shop = result['shop']
 
-        # Если у магазина не было владельца — назначаем текущего пользователя
         if not shop.owner:
             shop.owner = request.user
             shop.save(update_fields=['owner'])
@@ -239,7 +238,6 @@ class PartnerOrdersView(APIView):
                 status=status.HTTP_400_BAD_REQUEST,
             )
 
-        # Идентификаторы заказов, содержащих товары этого магазина
         order_ids = OrderItem.objects.filter(
             product__shop=shop
         ).values_list('order_id', flat=True).distinct()
