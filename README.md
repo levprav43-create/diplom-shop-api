@@ -42,21 +42,38 @@ Backend-часть сервиса автоматизации закупок дл
 
 ## API эндпоинты
 
+### Аутентификация
 - POST /api/auth/register/ — регистрация
 - POST /api/auth/login/ — вход (возвращает токен)
+
+### Каталог (для клиентов)
+- GET /api/shops/ — список магазинов
+- GET /api/categories/ — список категорий (фильтр: ?shop=<id>)
 - GET /api/shop/ — список товаров (поиск и фильтры: search, category, shop, price_min, price_max)
 - GET /api/shop/<id>/ — карточка товара с характеристиками
+
+### Корзина
 - GET /api/basket/ — корзина
 - POST /api/basket/ — добавить товар
 - PUT /api/basket/<id>/ — изменить количество
 - DELETE /api/basket/<id>/ — удалить позицию
+
+### Контакты (адреса доставки)
 - GET /api/contacts/ — мои адреса доставки
 - POST /api/contacts/ — создать адрес доставки
 - DELETE /api/contacts/<id>/ — удалить адрес
+
+### Заказы
 - POST /api/order-confirm/ — подтверждение заказа (basket + contact)
 - GET /api/orders/ — история заказов
 - GET /api/orders/<id>/ — детали заказа
-- PATCH /api/orders/<id>/status/ — смена статуса заказа (админ)
+- PATCH /api/orders/<id>/status/ — смена статуса заказа (только админ)
+
+### Блок партнёра (поставщика)
+- POST /api/partner/update/ — загрузить обновлённый прайс (multipart/form-data, поле file)
+- GET /api/partner/status/ — статус приёма заказов
+- PUT /api/partner/status/ — включить/выключить приём заказов (accepts_orders: true/false)
+- GET /api/partner/orders/ — список заказов с товарами партнёра
 
 ## Postman
 
@@ -66,6 +83,6 @@ Backend-часть сервиса автоматизации закупок дл
 
 ## Структура проекта
 
-- shops — каталог: магазины, категории, товары, характеристики, импорт
+- shops — каталог: магазины, категории, товары, характеристики, импорт, блок партнёра
 - users — регистрация и вход
 - orders — корзина, контакты, заказы

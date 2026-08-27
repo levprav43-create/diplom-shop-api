@@ -1,6 +1,6 @@
 """
 Генерирует postman_collection.json — готовую коллекцию Postman
-со всеми запросами API дипломного проекта.
+со всеми запросами API дипломного проекта (включая блок партнёра).
 
 Запуск:  python scripts/generate_postman_collection.py
 Затем в Postman: Import -> выбрать файл postman_collection.json.
@@ -39,10 +39,10 @@ def make_url(path):
     return url
 
 
-def request(name, method, path, body=None, auth=False):
+def request(name, method, path, body=None, auth=False, multipart=False):
     """Собирает один запрос Postman."""
     headers = []
-    if body is not None:
+    if body is not None and not multipart:
         headers.append(CONTENT_TYPE)
     if auth:
         headers.append(AUTH)
@@ -54,10 +54,17 @@ def request(name, method, path, body=None, auth=False):
             'url': make_url(path),
         },
     }
-    if body is not None:
+    if body is not None and not multipart:
         item['request']['body'] = {
             'mode': 'raw',
             'raw': json.dumps(body, ensure_ascii=False, indent=2),
+        }
+    if multipart:
+        item['request']['body'] = {
+            'mode': 'formdata',
+            'formdata': [
+                {'key': 'file', 'type': 'file', 'src': ''},
+            ],
         }
     if 'login' in name:
         item['event'] = [{
@@ -89,9 +96,14 @@ collection = {
             request('login admin', 'POST', '/api/auth/login/', {
                 'email': 'admin@diplom.local', 'password': 'Diplom2026!',
             }),
+            request('login partner', 'POST', '/api/auth/login/', {
+                'email': 'partner@example.com', 'password': 'Partner123!',
+            }),
         ]},
-        {'name': 'shop', 'item': [
-            request('list shops', 'GET', '/api/shop/', auth=True),
+        {'name': 'catalog', 'item': [
+            request('list shops', 'GET', '/api/shops/', auth=True),
+            request('list categories', 'GET', '/api/categories/', auth=True),
+            request('list products', 'GET', '/api/shop/', auth=True),
             request('искать товары', 'GET', '/api/shop/?search=iPhone', auth=True),
             request('фильтр по цене', 'GET', '/api/shop/?price_max=2000', auth=True),
             request('карточка товара', 'GET', '/api/shop/1/', auth=True),
@@ -121,6 +133,16 @@ collection = {
             request('детали заказа', 'GET', '/api/orders/1/', auth=True),
             request('сменить статус (админ)', 'PATCH', '/api/orders/1/status/',
                     {'status': 'processing'}, auth=True),
+        ]},
+        {'name': 'partner', 'item': [
+            request('загрузить прайс (YAML)', 'POST', '/api/partner/update/',
+                    auth=True, multipart=True),
+            request('статус партнёра', 'GET', '/api/partner/status/', auth=True),
+            request('включить приём заказов', 'PUT', '/api/partner/status/',
+                    {'accepts_orders': True}, auth=True),
+            request('выключить приём заказов', 'PUT', '/api/partner/status/',
+                    {'accepts_orders': False}, auth=True),
+            request('заказы партнёра', 'GET', '/api/partner/orders/', auth=True),
         ]},
     ],
 }
