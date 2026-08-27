@@ -62,3 +62,15 @@ def import_shop_data(data: dict) -> dict:
                 stats['parameters'] += 1
 
     return {'shop': shop, 'stats': stats}
+
+
+def import_data(data) -> list:
+    """
+    Импортирует данные в любом из двух форматов:
+    - один словарь (исходный прайс поставщика, как data/shop1.yaml)
+    - список словарей (файл экспорта exports/products.yaml)
+
+    :return: список результатов import_shop_data
+    """
+    items = data if isinstance(data, list) else [data]
+    return [import_shop_data(item) for item in items]

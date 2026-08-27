@@ -4,7 +4,9 @@
 Использование:
     python manage.py import_products                  # все файлы из папки data/
     python manage.py import_products data/shop1.yaml  # один конкретный файл
+    python manage.py import_products exports/products.yaml  # round-trip из экспорта
 
+Поддерживаются оба формата: одиночный прайс и список прайсов (экспорт).
 Вся логика загрузки живёт в shops/importer.py (принцип DRY).
 """
 from pathlib import Path
@@ -12,7 +14,7 @@ from pathlib import Path
 import yaml
 from django.core.management.base import BaseCommand, CommandError
 
-from shops.importer import import_shop_data
+from shops.importer import import_data
 
 
 class Command(BaseCommand):
@@ -41,15 +43,16 @@ class Command(BaseCommand):
             with open(path, encoding='utf-8') as file:
                 data = yaml.safe_load(file)
 
-            result = import_shop_data(data)
-            stats = result['stats']
-            self.stdout.write(
-                self.style.SUCCESS(
-                    f'{path.name}: магазин «{result["shop"].name}» — '
-                    f'категорий: {stats["categories"]}, '
-                    f'товаров: {stats["products"]}, '
-                    f'характеристик: {stats["parameters"]}'
+            # Поддержка обоих форматов (прайс и экспорт)
+            for result in import_data(data):
+                stats = result['stats']
+                self.stdout.write(
+                    self.style.SUCCESS(
+                        f'{path.name}: магазин «{result["shop"].name}» — '
+                        f'категорий: {stats["categories"]}, '
+                        f'товаров: {stats["products"]}, '
+                        f'характеристик: {stats["parameters"]}'
+                    )
                 )
-            )
 
         self.stdout.write(self.style.SUCCESS('Импорт завершён!'))

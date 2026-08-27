@@ -1,4 +1,4 @@
-"""URL-маршруты приложения shops: каталог и блок партнёра."""
+"""URL-маршруты приложения shops: каталог, экспорт и блок партнёра."""
 from django.urls import path
 
 from .views import (
@@ -7,6 +7,7 @@ from .views import (
     PartnerStatusView,
     PartnerUpdateView,
     ProductDetailView,
+    ProductExportView,
     ProductListView,
     ShopListView,
 )
@@ -16,6 +17,7 @@ urlpatterns = [
     path('shops/', ShopListView.as_view(), name='shop-list'),
     path('categories/', CategoryListView.as_view(), name='category-list'),
     path('shop/', ProductListView.as_view(), name='product-list'),
+    path('shop/export/', ProductExportView.as_view(), name='product-export'),
     path('shop/<int:pk>/', ProductDetailView.as_view(), name='product-detail'),
     # Блок партнёра (поставщика)
     path('partner/update/', PartnerUpdateView.as_view(), name='partner-update'),

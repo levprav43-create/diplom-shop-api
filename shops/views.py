@@ -1,6 +1,7 @@
-"""API-вьюхи приложения shops: магазины, категории, товары, блок партнёра."""
+"""API-вьюхи приложения shops: магазины, категории, товары, экспорт, партнёр."""
 import yaml
 from django.db.models import Q
+from django.http import HttpResponse
 from rest_framework import status
 from rest_framework.parsers import FormParser, MultiPartParser
 from rest_framework.permissions import IsAuthenticated
@@ -10,6 +11,7 @@ from rest_framework.views import APIView
 from orders.models import Order, OrderItem
 from orders.serializers import OrderListSerializer
 
+from .exporter import build_export_data
 from .importer import import_shop_data
 from .models import Category, Product, Shop
 from .serializers import (
@@ -109,6 +111,28 @@ class ProductDetailView(APIView):
         return Response(serializer.data)
 
 
+class ProductExportView(APIView):
+    """
+    Экспорт товаров в YAML (скачивание файла).
+
+    Формат совместим с импортом: файл можно снова загрузить
+    через import_products или /api/partner/update/.
+    """
+
+    permission_classes = (IsAuthenticated,)
+
+    def get(self, request):
+        data = build_export_data()
+        yaml_text = yaml.safe_dump(data, allow_unicode=True, sort_keys=False)
+        response = HttpResponse(
+            yaml_text, content_type='text/yaml; charset=utf-8'
+        )
+        response['Content-Disposition'] = (
+            'attachment; filename="products_export.yaml"'
+        )
+        return response
+
+
 # ==================== БЛОК ПАРТНЁРА (ПОСТАВЩИКА) ====================
 
 
@@ -128,8 +152,7 @@ class PartnerUpdateView(APIView):
     Поле формы: file — YAML-файл.
 
     Импорт выполняется синхронно, т.к. партнёру нужен немедленный ответ
-    со статистикой. Асинхронный вариант (Celery) доступен через кнопку
-    «Запустить импорт» в админке.
+    со статистикой. Асинхронный вариант (Celery) — кнопка в админке.
     """
 
     permission_classes = (IsAuthenticated,)
