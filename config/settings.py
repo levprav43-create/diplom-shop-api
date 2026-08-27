@@ -1,20 +1,17 @@
 """
-Настройки дипломного проекта (сервис автоматизации закупок).
-Секреты (SECRET_KEY, DEBUG) читаются из файла .env через python-decouple.
+Django settings for diplom-shop-api project.
 """
 from pathlib import Path
 
-from decouple import config
+from decouple import Csv, config
 
-# Базовая папка проекта
 BASE_DIR = Path(__file__).resolve().parent.parent
 
-# Секретный ключ и режим отладки — из .env
-SECRET_KEY = config('SECRET_KEY', default='django-insecure-dev-key')
+SECRET_KEY = config('SECRET_KEY', default='django-insecure-change-me-in-production')
 DEBUG = config('DEBUG', default=True, cast=bool)
+ALLOWED_HOSTS = config('ALLOWED_HOSTS', default='127.0.0.1,localhost', cast=Csv())
 
-ALLOWED_HOSTS = ['*']
-
+# Application definition
 INSTALLED_APPS = [
     'django.contrib.admin',
     'django.contrib.auth',
@@ -22,12 +19,12 @@ INSTALLED_APPS = [
     'django.contrib.sessions',
     'django.contrib.messages',
     'django.contrib.staticfiles',
-    # сторонние
+    # Third party
     'rest_framework',
     'rest_framework.authtoken',
-    # локальные приложения
-    'shops',
+    # Local apps
     'users',
+    'shops',
     'orders',
 ]
 
@@ -61,15 +58,15 @@ TEMPLATES = [
 
 WSGI_APPLICATION = 'config.wsgi.application'
 
-# PostgreSQL в Docker (порт 5433)
+# Database
 DATABASES = {
     'default': {
         'ENGINE': 'django.db.backends.postgresql',
-        'NAME': 'diplom_db',
-        'USER': 'diplom_user',
-        'PASSWORD': 'diplom_password',
-        'HOST': '127.0.0.1',
-        'PORT': '5433',
+        'NAME': config('DB_NAME', default='shop_db'),
+        'USER': config('DB_USER', default='shop_user'),
+        'PASSWORD': config('DB_PASSWORD', default='shop_password'),
+        'HOST': config('DB_HOST', default='localhost'),
+        'PORT': config('DB_PORT', default='5433'),
     }
 }
 
@@ -89,15 +86,17 @@ STATIC_URL = 'static/'
 
 DEFAULT_AUTO_FIELD = 'django.db.models.BigAutoField'
 
-# Настройки Django REST Framework
+# Django REST Framework
 REST_FRAMEWORK = {
     'DEFAULT_AUTHENTICATION_CLASSES': [
         'rest_framework.authentication.TokenAuthentication',
-        'rest_framework.authentication.SessionAuthentication',
+    ],
+    'DEFAULT_PERMISSION_CLASSES': [
+        'rest_framework.permissions.IsAuthenticated',
     ],
 }
 
-# Пока письма печатаются в консоль (реальный SMTP подключим позже)
+# Email (для разработки — в консоль, в проде — реальный SMTP)
 EMAIL_BACKEND = 'django.core.mail.backends.console.EmailBackend'
-DEFAULT_FROM_EMAIL = 'shop@diplom.local'
-ADMIN_EMAIL = 'admin@diplom.local'
+DEFAULT_FROM_EMAIL = config('DEFAULT_FROM_EMAIL', default='shop@diplom.local')
+ADMIN_EMAIL = config('ADMIN_EMAIL', default='admin@diplom.local')

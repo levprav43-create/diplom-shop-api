@@ -1,0 +1,17 @@
+# Виртуальное окружение и кеш Python
+venv/
+__pycache__/
+*.pyc
+*.pyo
+
+# Git
+.git/
+
+# Секреты — передаются через env_file, НЕ в образ
+.env
+
+# Артефакты и служебное
+exports/
+.idea/
+.vscode/
+*.log
