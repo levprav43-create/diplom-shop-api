@@ -1,4 +1,4 @@
-"""Сериализаторы приложения shops: магазины, категории, товары."""
+"""Сериализаторы приложения shops: магазины, категории, товары, статус партнёра."""
 from rest_framework import serializers
 
 from .models import Category, Product, ProductParameter, Shop
@@ -73,3 +73,11 @@ class ProductDetailSerializer(serializers.ModelSerializer):
             'id', 'name', 'model', 'description', 'shop', 'category',
             'price', 'price_rrc', 'quantity', 'parameters',
         )
+
+
+class PartnerStatusSerializer(serializers.ModelSerializer):
+    """Статус приёма заказов партнёром."""
+
+    class Meta:
+        model = Shop
+        fields = ('id', 'name', 'accepts_orders')

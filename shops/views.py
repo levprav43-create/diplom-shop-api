@@ -1,13 +1,20 @@
-"""API-вьюхи приложения shops: магазины, категории, список товаров, карточка."""
+"""API-вьюхи приложения shops: магазины, категории, товары, блок партнёра."""
+import yaml
 from django.db.models import Q
 from rest_framework import status
+from rest_framework.parsers import FormParser, JSONParser, MultiPartParser
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 from rest_framework.views import APIView
 
+from orders.models import Order, OrderItem
+from orders.serializers import OrderListSerializer
+
+from .importer import import_shop_data
 from .models import Category, Product, Shop
 from .serializers import (
     CategoryListSerializer,
+    PartnerStatusSerializer,
     ProductDetailSerializer,
     ProductListSerializer,
     ShopListSerializer,
@@ -99,4 +106,144 @@ class ProductDetailView(APIView):
             )
 
         serializer = ProductDetailSerializer(product)
+        return Response(serializer.data)
+
+
+# ==================== БЛОК ПАРТНЁРА (ПОСТАВЩИКА) ====================
+
+
+def _get_partner_shop(user):
+    """
+    Возвращает магазин, владельцем которого является пользователь.
+    Если магазина нет — None (эндпоинт вернёт 400).
+    """
+    return Shop.objects.filter(owner=user).first()
+
+
+class PartnerUpdateView(APIView):
+    """
+    Поставщик загружает YAML с обновлённым прайсом (multipart/form-data).
+
+    POST /api/partner/update/
+    Поле формы: file — YAML-файл.
+
+    Если у магазина ещё не был owner — назначается текущий пользователь.
+    """
+
+    permission_classes = (IsAuthenticated,)
+    parser_classes = (MultiPartParser, FormParser)
+
+    def post(self, request):
+        file = request.FILES.get('file')
+        if not file:
+            return Response(
+                {'detail': 'Поле "file" с YAML-файлом обязательно'},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        try:
+            data = yaml.safe_load(file.read().decode('utf-8'))
+        except yaml.YAMLError as exc:
+            return Response(
+                {'detail': f'Ошибка парсинга YAML: {exc}'},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        shop_name = data.get('shop')
+        if not shop_name:
+            return Response(
+                {'detail': 'В YAML отсутствует поле "shop"'},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        # Если магазин существует и имеет другого владельца — 403
+        existing = Shop.objects.filter(name=shop_name).first()
+        if existing and existing.owner and existing.owner != request.user:
+            return Response(
+                {'detail': 'Этот магазин принадлежит другому пользователю'},
+                status=status.HTTP_403_FORBIDDEN,
+            )
+
+        # Импортируем через общий модуль (DRY)
+        result = import_shop_data(data)
+        shop = result['shop']
+
+        # Если у магазина не было владельца — назначаем текущего пользователя
+        if not shop.owner:
+            shop.owner = request.user
+            shop.save(update_fields=['owner'])
+
+        stats = result['stats']
+        return Response({
+            'shop': shop.name,
+            'categories': stats['categories'],
+            'products': stats['products'],
+            'parameters': stats['parameters'],
+        }, status=status.HTTP_200_OK)
+
+
+class PartnerStatusView(APIView):
+    """
+    Статус приёма заказов партнёром.
+
+    GET — текущий статус.
+    PUT — переключить accepts_orders (true/false).
+    """
+
+    permission_classes = (IsAuthenticated,)
+
+    def get(self, request):
+        shop = _get_partner_shop(request.user)
+        if not shop:
+            return Response(
+                {'detail': 'У вас нет магазина. Загрузите прайс через /api/partner/update/'},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        return Response(PartnerStatusSerializer(shop).data)
+
+    def put(self, request):
+        shop = _get_partner_shop(request.user)
+        if not shop:
+            return Response(
+                {'detail': 'У вас нет магазина'},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        accepts_orders = request.data.get('accepts_orders')
+        if accepts_orders not in (True, False):
+            return Response(
+                {'detail': 'Поле "accepts_orders" должно быть true или false'},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        shop.accepts_orders = accepts_orders
+        shop.save(update_fields=['accepts_orders'])
+        return Response(PartnerStatusSerializer(shop).data)
+
+
+class PartnerOrdersView(APIView):
+    """
+    Список заказов, содержащих товары партнёра.
+
+    GET /api/partner/orders/ — возвращает заказы, в которых есть хотя бы
+    одна позиция с товаром из его магазинов.
+    """
+
+    permission_classes = (IsAuthenticated,)
+
+    def get(self, request):
+        shop = _get_partner_shop(request.user)
+        if not shop:
+            return Response(
+                {'detail': 'У вас нет магазина'},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        # Идентификаторы заказов, содержащих товары этого магазина
+        order_ids = OrderItem.objects.filter(
+            product__shop=shop
+        ).values_list('order_id', flat=True).distinct()
+
+        orders = Order.objects.filter(id__in=order_ids).order_by('-created_at')
+        serializer = OrderListSerializer(orders, many=True)
         return Response(serializer.data)
