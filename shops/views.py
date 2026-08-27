@@ -1,12 +1,42 @@
-"""API-вьюхи приложения shops: список товаров и детальная карточка."""
+"""API-вьюхи приложения shops: магазины, категории, список товаров, карточка."""
 from django.db.models import Q
 from rest_framework import status
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 from rest_framework.views import APIView
 
-from .models import Product
-from .serializers import ProductDetailSerializer, ProductListSerializer
+from .models import Category, Product, Shop
+from .serializers import (
+    CategoryListSerializer,
+    ProductDetailSerializer,
+    ProductListSerializer,
+    ShopListSerializer,
+)
+
+
+class ShopListView(APIView):
+    """Список магазинов (спецификация: list shops)."""
+
+    permission_classes = (IsAuthenticated,)
+
+    def get(self, request):
+        shops = Shop.objects.all()
+        serializer = ShopListSerializer(shops, many=True)
+        return Response(serializer.data)
+
+
+class CategoryListView(APIView):
+    """Список категорий; фильтр по магазину: ?shop=<id> (спецификация: list categories)."""
+
+    permission_classes = (IsAuthenticated,)
+
+    def get(self, request):
+        queryset = Category.objects.select_related('shop').all()
+        shop = request.query_params.get('shop')
+        if shop:
+            queryset = queryset.filter(shop_id=shop)
+        serializer = CategoryListSerializer(queryset, many=True)
+        return Response(serializer.data)
 
 
 class ProductListView(APIView):

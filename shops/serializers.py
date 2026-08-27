@@ -1,19 +1,41 @@
-"""Сериализаторы приложения shops: список товаров и детальная карточка."""
+"""Сериализаторы приложения shops: магазины, категории, товары."""
 from rest_framework import serializers
 
 from .models import Category, Product, ProductParameter, Shop
 
 
 class ShopSerializer(serializers.ModelSerializer):
+    """Краткое представление магазина."""
+
     class Meta:
         model = Shop
         fields = ('id', 'name')
 
 
+class ShopListSerializer(serializers.ModelSerializer):
+    """Список магазинов с признаком приёма заказов."""
+
+    class Meta:
+        model = Shop
+        fields = ('id', 'name', 'accepts_orders')
+
+
 class CategorySerializer(serializers.ModelSerializer):
+    """Краткое представление категории."""
+
     class Meta:
         model = Category
         fields = ('id', 'name')
+
+
+class CategoryListSerializer(serializers.ModelSerializer):
+    """Список категорий с привязкой к магазину."""
+
+    shop = ShopSerializer(read_only=True)
+
+    class Meta:
+        model = Category
+        fields = ('id', 'name', 'shop', 'external_id')
 
 
 class ProductParameterSerializer(serializers.ModelSerializer):
