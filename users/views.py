@@ -1,7 +1,11 @@
-"""API-вьюхи приложения users: регистрация и вход."""
+"""API-вьюхи приложения users: регистрация, вход, восстановление пароля."""
 from django.conf import settings
 from django.contrib.auth import authenticate, get_user_model
+from django.contrib.auth.tokens import default_token_generator
+from django.core.exceptions import ValidationError
 from django.core.mail import send_mail
+from django.utils.encoding import force_bytes, force_str
+from django.utils.http import urlsafe_base64_decode, urlsafe_base64_encode
 from rest_framework import status
 from rest_framework.authtoken.models import Token
 from rest_framework.permissions import AllowAny
@@ -74,3 +78,81 @@ class LoginView(APIView):
             )
         token, _ = Token.objects.get_or_create(user=user)
         return Response({'email': user.email, 'token': token.key})
+
+
+class PasswordResetRequestView(APIView):
+    """
+    Восстановление пароля: высылает письмо с uid и token.
+
+    Безопасность: всегда возвращает 200 — не раскрываем,
+    зарегистрирован ли такой email в системе.
+    """
+
+    permission_classes = (AllowAny,)
+
+    def post(self, request):
+        email = (request.data.get('email') or '').lower()
+        user = User.objects.filter(email__iexact=email).first()
+
+        if user is not None:
+            uid = urlsafe_base64_encode(force_bytes(user.pk))
+            token = default_token_generator.make_token(user)
+            send_mail(
+                subject='Восстановление пароля',
+                message=(
+                    f'Здравствуйте, {user.first_name}!\n\n'
+                    f'Получен запрос на восстановление пароля.\n'
+                    f'Чтобы задать новый пароль, отправьте запрос на '
+                    f'/api/auth/password-reset-confirm/ со следующими данными:\n'
+                    f'uid: {uid}\n'
+                    f'token: {token}\n\n'
+                    f'Если это были не вы — просто проигнорируйте письмо.'
+                ),
+                from_email=settings.DEFAULT_FROM_EMAIL,
+                recipient_list=[user.email],
+                fail_silently=True,
+            )
+
+        return Response(
+            {'detail': 'Если email зарегистрирован, письмо с инструкциями отправлено.'}
+        )
+
+
+class PasswordResetConfirmView(APIView):
+    """Устанавливает новый пароль по uid и token из письма."""
+
+    permission_classes = (AllowAny,)
+
+    def post(self, request):
+        uid = request.data.get('uid')
+        token = request.data.get('token')
+        new_password = request.data.get('new_password') or ''
+
+        # Декодируем uid и находим пользователя
+        try:
+            pk = force_str(urlsafe_base64_decode(uid))
+            user = User.objects.get(pk=pk)
+        except (TypeError, ValueError, OverflowError, ValidationError, User.DoesNotExist):
+            return Response(
+                {'detail': 'Неверный или просроченный код восстановления'},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        # Проверяем токен (одноразовый и привязан к текущему паролю)
+        if not default_token_generator.check_token(user, token):
+            return Response(
+                {'detail': 'Неверный или просроченный токен восстановления'},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        if len(new_password) < 8:
+            return Response(
+                {'detail': 'Пароль должен быть не короче 8 символов'},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        user.set_password(new_password)
+        user.save()
+        # Аннулируем старые токены — пользователь войдёт заново (безопасность)
+        Token.objects.filter(user=user).delete()
+        return Response({'detail': 'Пароль изменён. Войдите с новым паролем.'})
