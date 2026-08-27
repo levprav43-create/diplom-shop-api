@@ -1,6 +1,6 @@
 """
 Генерирует postman_collection.json — готовую коллекцию Postman
-со всеми запросами API дипломного проекта (включая блок партнёра).
+со всеми запросами API дипломного проекта.
 
 Запуск:  python scripts/generate_postman_collection.py
 Затем в Postman: Import -> выбрать файл postman_collection.json.
@@ -98,6 +98,15 @@ collection = {
             }),
             request('login partner', 'POST', '/api/auth/login/', {
                 'email': 'partner@example.com', 'password': 'Partner123!',
+            }),
+            request('восстановление пароля', 'POST', '/api/auth/password-reset/', {
+                'email': 'ivanov@example.com',
+            }),
+            request('подтверждение нового пароля', 'POST',
+                    '/api/auth/password-reset-confirm/', {
+                'uid': 'ВСТАВЬ_UID_ИЗ_ПИСЬМА',
+                'token': 'ВСТАВЬ_TOKEN_ИЗ_ПИСЬМА',
+                'new_password': 'NewPass123!',
             }),
         ]},
         {'name': 'catalog', 'item': [

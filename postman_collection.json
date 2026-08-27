@@ -168,6 +168,62 @@
               }
             }
           ]
+        },
+        {
+          "name": "восстановление пароля",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/api/auth/password-reset/",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "auth",
+                "password-reset",
+                ""
+              ]
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"email\": \"ivanov@example.com\"\n}"
+            }
+          }
+        },
+        {
+          "name": "подтверждение нового пароля",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/api/auth/password-reset-confirm/",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "auth",
+                "password-reset-confirm",
+                ""
+              ]
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"uid\": \"ВСТАВЬ_UID_ИЗ_ПИСЬМА\",\n  \"token\": \"ВСТАВЬ_TOKEN_ИЗ_ПИСЬМА\",\n  \"new_password\": \"NewPass123!\"\n}"
+            }
+          }
         }
       ]
     },
